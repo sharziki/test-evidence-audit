@@ -30,5 +30,6 @@
     "sensor": "BENCH-TEMP",
     "reference": "REF-TEMP"
   },
-  "timestamp_unit": "ns"
+  "timestamp_unit": "ns",
+  "input_file": "logger_dropout.csv"
 }

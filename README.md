@@ -1,53 +1,63 @@
 # Test Evidence Audit
 
-A local CLI for checking whether two sensors agree during a bench calibration. It reports observed disagreement, missing evidence, and borderline readings where measurement uncertainty crosses the tolerance. It reads wide CSVs like the ones exported by PSP Liquids.
+Check a sensor against a reference after a bench run. The CLI gives you a verdict, shows where the log is missing evidence, and saves a JSON report you can attach to your test notes. Set up a calibration profile once and reuse it on every run with the same CSV layout and test protocol.
 
-## Quickstart
+Runs offline with Python 3.10 or newer. No packages to install.
 
-Clone or download this repo and open a terminal in the folder. Use Python 3.10 or newer. There are no packages to install.
-
-### 1. Run the demo
+## Try it in 30 seconds
 
 ```sh
-python3 audit.py examples/logger_dropout.csv --sensor BENCH-TEMP --reference REF-TEMP --duration-s 30 --tolerance 0.5 --max-gap-s 2
+git clone https://github.com/sharziki/test-evidence-audit.git
+cd test-evidence-audit
+python3 audit.py examples/logger_dropout.csv --profile examples/temperature.json
 ```
 
-Expect `insufficient_evidence` and a gap from 11 to 19 seconds. The complete synthetic trace has seven observations with a 2.6 °C disagreement. Those are precisely the observations removed in the dropout example. The remaining observations all agree within 0.1 °C and would pass a samples-only check.
+```text
+INSUFFICIENT EVIDENCE
+24 paired readings from 0 to 30 s
+Largest measured difference: 0.1 (tolerance 0.5)
+1 oversized gaps; longest 11 to 19 s (8 s)
+```
 
-### 2. Find the columns in your own CSV
+The synthetic demo drops the seven readings that showed a 2.6 °C disagreement. The remaining readings agree within tolerance. The audit flags the missing interval so the run doesn’t get signed off as a pass.
+
+## Use your own CSV
+
+**First run.** The CLI lists your headers and lets you select columns by number. Choose two channels in the same units and on the same clock, then enter your calibration window and acceptance limits.
 
 ```sh
-python3 audit.py "my run.csv" --list-columns
+python3 audit.py "run-01.csv" --setup calibration.json --report run-01-audit.json
 ```
 
-Pick the measured channel, a reference channel in the same units, and their shared timestamp column. The default PSP clock is `Dev5_BCLS_ai_time` in nanoseconds. Set `--clock` and `--timestamp-unit` if your export uses a different header or numeric time unit (`ns`, `us`, `ms`, or `s`). For a Parquet input, export to wide CSV first. [PSP example CSV](https://github.com/Purdue-Space-Program/simple_data_plotter/blob/932299158ccd1d2844c414de53847023ba1edf46/utils/test_data_truncated.csv) · [PSP Parquet converter](https://github.com/Purdue-Space-Program/simple_data_plotter/blob/932299158ccd1d2844c414de53847023ba1edf46/utils/parquet_to_csv_converter.py)
-
-### 3. Audit the calibration window
-
-Replace the example column names and settings with your own protocol. Start time is relative to the first timestamp in the selected clock. Tolerance and uncertainty use the channels' measurement units.
+**Every run after that.** Reuse the profile and give each report its own filename. Omit `--report` for a terminal summary only.
 
 ```sh
-python3 audit.py "my run.csv" --clock Dev5_BCLS_ai_time --sensor "SENSOR COLUMN" --reference "REFERENCE COLUMN" --start-s 10 --duration-s 30 --tolerance 0.5 --max-gap-s 0.05 --difference-uncertainty 0.1 > audit-report.json
+python3 audit.py "run-02.csv" --profile calibration.json --report run-02-audit.json
 ```
 
-Set `--max-gap-s` based on the longest missing interval your check can tolerate. For example, 0.05 s is five nominal intervals at 100 samples/s. Supply `--difference-uncertainty` when your calibration protocol gives a defensible absolute bound on error in the **difference** between the two readings. Its default of zero applies the tolerance to the observed values directly.
+| Setup field | What to enter |
+| --- | --- |
+| Shared timestamp | PSP Liquids' `Dev5_BCLS_ai_time` uses nanoseconds. For another numeric clock, select its column and unit. |
+| Sensor and reference | Two columns sampled on that clock, in the same units. |
+| Start and duration | Seconds relative to the first timestamp in that clock. Select the calibration interval, and override with `--start-s` or `--duration-s` if it shifts between runs. |
+| Tolerance | Maximum acceptable absolute difference, in sensor units. |
+| Maximum gap | Longest allowed interval between paired observations, in seconds. Use your protocol limit. |
+| Difference uncertainty | An absolute uncertainty bound on the measured difference, if your calibration protocol supplies one. Accepting zero evaluates the recorded values directly. |
 
-## Reading the report
+Profiles save settings only. Review them before sharing or reusing them on a different setup. For PSP Parquet logs, convert to wide CSV first. On Windows, use `py -3` in place of `python3` if needed. [PSP CSV example](https://github.com/Purdue-Space-Program/simple_data_plotter/blob/932299158ccd1d2844c414de53847023ba1edf46/utils/test_data_truncated.csv) · [PSP Parquet converter](https://github.com/Purdue-Space-Program/simple_data_plotter/blob/932299158ccd1d2844c414de53847023ba1edf46/utils/parquet_to_csv_converter.py)
+
+## Read the verdict
 
 | Verdict | Meaning | Exit code |
 | --- | --- | --- |
-| `pass` | Every measured difference, including its uncertainty bound, is within tolerance. The window also meets the sampling rule. | 0 |
-| `fail` | At least one measured difference exceeds tolerance even after subtracting its uncertainty bound. | 1 |
-| `insufficient_evidence` | No definitive failure was observed, but sampling was insufficient or a difference's uncertainty interval crossed the tolerance. | 3 |
+| Pass | All measured differences, including the supplied uncertainty bound, fit within tolerance, and the window meets the sampling rule. | 0 |
+| Fail | At least one observed difference exceeds tolerance even after subtracting its uncertainty bound. | 1 |
+| Insufficient evidence | Coverage is too sparse or a reading's uncertainty interval crosses the tolerance, with no confirmed failure. | 3 |
 
-An invalid input exits with code 2 and prints the reason to stderr. The JSON also reports the exact gap intervals, the largest interval, the fraction of the window outside oversized gaps, and signed mean difference (sensor minus reference). A failure takes precedence over coverage or uncertainty limits, which remain visible in the report.
+An invalid input exits with code 2. Confirmed failure takes precedence, and the report still lists coverage and uncertainty issues. The audit counts gaps between paired observations and at both window edges. Blank or NaN readings contribute no pair. It assumes a common clock and can only assess the samples and calibration limits you give it.
 
-For absolute measured difference `d` and a supplied uncertainty bound `u`, the tool considers `[max(0, d-u), d+u]`. For example, `0.45 ± 0.10` overlaps a `0.50` tolerance and requires review. The tool does not estimate uncertainty, synchronize separate clocks, or infer sensor behavior between samples. A passing result describes the check you configured. Blank and NaN sensor cells contribute no pairs. The sampling rule counts gaps between paired readings and at the edges of the selected window.
+Use `--json` to print the detailed report to stdout with a profile, `--list-columns` to print headers only, and `--help` for all options. The report includes paired-sample count, exact gap intervals, largest measured difference, and signed mean difference.
 
-## Verify
+## Development
 
-```sh
-python3 -m unittest -v
-```
-
-The included bench traces are synthetic. A public PSP Liquids export was used for format testing. Source is MIT-licensed.
+Run `python3 -m unittest -v`. The included calibration fixtures are synthetic. A public PSP Liquids CSV was used for format testing. MIT licensed.

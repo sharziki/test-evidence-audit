@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from decimal import Decimal
@@ -55,6 +58,27 @@ class CalibrationTests(unittest.TestCase):
             path = Path(directory) / "samples.csv"
             path.write_text("time,sensor,reference\n1763788180000.000001,20,20\n1763788180000.000002,21,20\n")
             self.assertEqual(load_pairs(path, "time", "sensor", "reference", "ms"), [(0, 0), (1, 1)])
+
+    def test_guided_profile_replays_and_saves_report(self):
+        command = [sys.executable, str(EXAMPLES.parent / "audit.py")]
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile.json"
+            report = Path(directory) / "report.json"
+            setup = subprocess.run(
+                [*command, str(EXAMPLES / "clean.csv"), "--setup", str(profile)],
+                input="\n\n2\n3\n\n30\n0.5\n2\n\n",
+                text=True, capture_output=True,
+            )
+            self.assertEqual(setup.returncode, 0, setup.stderr)
+            self.assertEqual(json.loads(profile.read_text())["sensor"], "BENCH-TEMP")
+            replay = subprocess.run(
+                [*command, str(EXAMPLES / "logger_dropout.csv"), "--profile", str(profile),
+                 "--report", str(report)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(replay.returncode, 3, replay.stderr)
+            self.assertIn("longest 11 to 19 s", replay.stdout)
+            self.assertEqual(json.loads(report.read_text())["verdict"], "insufficient_evidence")
 
 
 if __name__ == "__main__":

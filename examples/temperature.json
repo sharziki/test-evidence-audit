@@ -1,0 +1,11 @@
+{
+  "clock": "Dev5_BCLS_ai_time",
+  "timestamp_unit": "ns",
+  "sensor": "BENCH-TEMP",
+  "reference": "REF-TEMP",
+  "start_s": "0",
+  "duration_s": "30",
+  "tolerance": "0.5",
+  "max_gap_s": "2",
+  "difference_uncertainty": "0"
+}
