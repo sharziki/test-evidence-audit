@@ -1,0 +1,20 @@
+{
+  "verdict": "insufficient_evidence",
+  "samples_only_verdict": "pass",
+  "paired_samples": 24,
+  "scored_window_s": [
+    0.0,
+    30.0
+  ],
+  "tolerance": "0.5",
+  "max_gap_s": 2.0,
+  "worst_observed_absolute_error": "0.1",
+  "gaps": [
+    {
+      "from_s": 11.0,
+      "to_s": 19.0,
+      "duration_s": 8.0
+    }
+  ],
+  "out_of_tolerance_samples": []
+}
