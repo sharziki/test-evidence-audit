@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 NS_PER_SECOND = 1_000_000_000
+TIMESTAMP_SCALE = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": NS_PER_SECOND}
 
 
 def finite_decimal(raw):
@@ -22,7 +23,7 @@ def seconds_to_ns(value):
     return int(result)
 
 
-def load_pairs(path, clock, sensor, reference):
+def load_pairs(path, clock, sensor, reference, time_unit="ns"):
     """Read a shared clock without converting epoch nanoseconds to floats."""
     with path.open(newline="", encoding="utf-8-sig") as stream:
         rows = csv.DictReader(stream)
@@ -40,9 +41,9 @@ def load_pairs(path, clock, sensor, reference):
                 stamp, measured, standard = (value.strip() for value in raw)
                 if not stamp and not (measured or standard):
                     continue
-                timestamp = finite_decimal(stamp)
+                timestamp = finite_decimal(stamp) * TIMESTAMP_SCALE[time_unit]
                 if timestamp != timestamp.to_integral_value():
-                    raise ValueError("expected an integer epoch-nanosecond timestamp")
+                    raise ValueError("timestamp must resolve to whole nanoseconds")
                 timestamp = int(timestamp)
                 if previous is not None and timestamp <= previous:
                     raise ValueError("shared clock must be strictly increasing")
@@ -52,7 +53,7 @@ def load_pairs(path, clock, sensor, reference):
                 values = [None if value.lower() in ("", "nan") else finite_decimal(value)
                           for value in (measured, standard)]
                 if None not in values:
-                    samples.append((timestamp - origin, abs(values[0] - values[1])))
+                    samples.append((timestamp - origin, values[0] - values[1]))
             except (InvalidOperation, ValueError) as error:
                 raise ValueError(f"CSV line {rows.line_num}: {error}") from error
     if origin is None:
@@ -60,27 +61,53 @@ def load_pairs(path, clock, sensor, reference):
     return samples
 
 
-def audit(samples, start, end, max_gap, tolerance):
-    pairs = [(time, error) for time, error in samples if start <= time <= end]
+def audit(samples, start, end, max_gap, tolerance, uncertainty=Decimal(0)):
+    pairs = [(time, difference) for time, difference in samples if start <= time <= end]
     boundaries = [start, *(time for time, _ in pairs), end]
+    oversized = [(left, right) for left, right in zip(boundaries, boundaries[1:])
+                 if right - left > max_gap]
     gaps = [{"from_s": left / NS_PER_SECOND, "to_s": right / NS_PER_SECOND,
-             "duration_s": (right - left) / NS_PER_SECOND}
-            for left, right in zip(boundaries, boundaries[1:]) if right - left > max_gap]
-    violations = [{"time_s": time / NS_PER_SECOND, "absolute_error": str(error)}
-                  for time, error in pairs if error > tolerance]
-    verdict = "fail" if violations else "pass"
-    if not violations and (gaps or len(pairs) < 2):
-        verdict = "insufficient_evidence"
+             "duration_s": (right - left) / NS_PER_SECOND} for left, right in oversized]
+    violations, indeterminate = [], []
+    for time, difference in pairs:
+        error = abs(difference)
+        lower = max(Decimal(0), error - uncertainty)
+        upper = error + uncertainty
+        if upper <= tolerance:
+            continue
+        evidence = {"time_s": time / NS_PER_SECOND, "absolute_error": str(error),
+                    "error_bounds": [str(lower), str(upper)]}
+        (violations if lower > tolerance else indeterminate).append(evidence)
+
+    reasons = []
+    if gaps:
+        reasons.append("sampling_gap")
+    if len(pairs) < 2:
+        reasons.append("too_few_pairs")
+    if indeterminate:
+        reasons.append("uncertainty_overlaps_tolerance")
+
+    verdict = "fail" if violations else "insufficient_evidence" if reasons else "pass"
+    differences = [difference for _, difference in pairs]
+    worst = max(map(abs, differences)) if differences else None
+    samples_only = "no_data" if worst is None else "fail" if worst > tolerance else "pass"
+    gap_time = sum(right - left for left, right in oversized)
     return {
         "verdict": verdict,
-        "samples_only_verdict": ("fail" if violations else "pass") if pairs else "no_data",
+        "evidence_limits": reasons,
+        "samples_only_verdict": samples_only,
         "paired_samples": len(pairs),
         "scored_window_s": [start / NS_PER_SECOND, end / NS_PER_SECOND],
         "tolerance": str(tolerance),
+        "difference_uncertainty": str(uncertainty),
         "max_gap_s": max_gap / NS_PER_SECOND,
-        "worst_observed_absolute_error": str(max(error for _, error in pairs)) if pairs else None,
+        "largest_pair_or_edge_interval_s": max(b - a for a, b in zip(boundaries, boundaries[1:])) / NS_PER_SECOND,
+        "fraction_of_window_outside_oversized_gaps": round(1 - gap_time / (end - start), 6),
+        "mean_signed_difference": str(sum(differences) / len(differences)) if differences else None,
+        "worst_observed_absolute_error": str(worst) if worst is not None else None,
         "gaps": gaps,
         "out_of_tolerance_samples": violations,
+        "uncertainty_overlap_samples": indeterminate,
     }
 
 
@@ -88,26 +115,45 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path)
     parser.add_argument("--clock", default="Dev5_BCLS_ai_time")
-    parser.add_argument("--sensor", required=True)
-    parser.add_argument("--reference", required=True)
+    parser.add_argument("--list-columns", action="store_true", help="print CSV headers and exit")
+    parser.add_argument("--timestamp-unit", choices=TIMESTAMP_SCALE, default="ns")
+    parser.add_argument("--sensor")
+    parser.add_argument("--reference")
     parser.add_argument("--start-s", default="0", help="seconds from first shared-clock timestamp")
-    parser.add_argument("--duration-s", required=True)
-    parser.add_argument("--max-gap-s", required=True)
-    parser.add_argument("--tolerance", required=True, help="maximum absolute difference in sensor units")
+    parser.add_argument("--duration-s")
+    parser.add_argument("--max-gap-s")
+    parser.add_argument("--tolerance", help="maximum absolute difference in sensor units")
+    parser.add_argument("--difference-uncertainty", default="0",
+                        help="absolute bound on error in the measured difference, in sensor units")
     args = parser.parse_args()
     try:
+        if args.list_columns:
+            with args.csv.open(newline="", encoding="utf-8-sig") as stream:
+                headers = next(csv.reader(stream), [])
+            if not headers:
+                raise ValueError("CSV has no header row")
+            print("\n".join(headers))
+            return 0
+        if any(value is None for value in (args.sensor, args.reference, args.duration_s,
+                                          args.max_gap_s, args.tolerance)):
+            raise ValueError("audit requires --sensor, --reference, --duration-s, --max-gap-s and --tolerance")
         start = seconds_to_ns(args.start_s)
         duration = seconds_to_ns(args.duration_s)
         max_gap = seconds_to_ns(args.max_gap_s)
         tolerance = finite_decimal(args.tolerance)
         if start < 0 or duration <= 0 or not 0 < max_gap < duration or tolerance < 0:
             raise ValueError("require start >= 0, duration > max gap > 0, and tolerance >= 0")
+        uncertainty = finite_decimal(args.difference_uncertainty)
+        if uncertainty < 0:
+            raise ValueError("difference uncertainty must be nonnegative")
         if len({args.clock, args.sensor, args.reference}) != 3:
             raise ValueError("clock, sensor, and reference must be different columns")
-        samples = load_pairs(args.csv, args.clock, args.sensor, args.reference)
+        samples = load_pairs(args.csv, args.clock, args.sensor, args.reference, args.timestamp_unit)
     except (OSError, csv.Error, InvalidOperation, ValueError) as error:
         parser.error(str(error))
-    result = audit(samples, start, start + duration, max_gap, tolerance)
+    result = audit(samples, start, start + duration, max_gap, tolerance, uncertainty)
+    result["columns"] = {"clock": args.clock, "sensor": args.sensor, "reference": args.reference}
+    result["timestamp_unit"] = args.timestamp_unit
     print(json.dumps(result, indent=2))
     return {"pass": 0, "fail": 1, "insufficient_evidence": 3}[result["verdict"]]
 

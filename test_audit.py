@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -32,6 +33,28 @@ class CalibrationTests(unittest.TestCase):
         report = audit(samples, 0, seconds_to_ns("5"), seconds_to_ns("2"), Decimal("0.5"))
         self.assertEqual(report["verdict"], "insufficient_evidence")
         self.assertEqual(report["gaps"], [{"from_s": 0, "to_s": 3, "duration_s": 3}])
+
+    def test_uncertainty_keeps_borderline_agreement_unresolved(self):
+        samples = [(0, Decimal("0.45")), (seconds_to_ns("1"), Decimal("-0.45"))]
+        report = audit(samples, 0, seconds_to_ns("1"), seconds_to_ns("1"),
+                       Decimal("0.50"), Decimal("0.10"))
+        self.assertEqual(report["samples_only_verdict"], "pass")
+        self.assertEqual(report["verdict"], "insufficient_evidence")
+        self.assertEqual(len(report["uncertainty_overlap_samples"]), 2)
+        self.assertEqual(Decimal(report["mean_signed_difference"]), 0)
+
+    def test_large_disagreement_still_fails_with_uncertainty(self):
+        samples = [(0, Decimal("-0.7")), (seconds_to_ns("1"), Decimal("0"))]
+        report = audit(samples, 0, seconds_to_ns("1"), seconds_to_ns("1"),
+                       Decimal("0.5"), Decimal("0.1"))
+        self.assertEqual(report["verdict"], "fail")
+        self.assertEqual(report["out_of_tolerance_samples"][0]["error_bounds"], ["0.6", "0.8"])
+
+    def test_numeric_millisecond_clock_preserves_relative_subsecond_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "samples.csv"
+            path.write_text("time,sensor,reference\n1763788180000.000001,20,20\n1763788180000.000002,21,20\n")
+            self.assertEqual(load_pairs(path, "time", "sensor", "reference", "ms"), [(0, 0), (1, 1)])
 
 
 if __name__ == "__main__":

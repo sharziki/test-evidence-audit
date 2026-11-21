@@ -1,5 +1,8 @@
 {
   "verdict": "insufficient_evidence",
+  "evidence_limits": [
+    "sampling_gap"
+  ],
   "samples_only_verdict": "pass",
   "paired_samples": 24,
   "scored_window_s": [
@@ -7,7 +10,11 @@
     30.0
   ],
   "tolerance": "0.5",
+  "difference_uncertainty": "0",
   "max_gap_s": 2.0,
+  "largest_pair_or_edge_interval_s": 8.0,
+  "fraction_of_window_outside_oversized_gaps": 0.733333,
+  "mean_signed_difference": "0.1",
   "worst_observed_absolute_error": "0.1",
   "gaps": [
     {
@@ -16,5 +23,12 @@
       "duration_s": 8.0
     }
   ],
-  "out_of_tolerance_samples": []
+  "out_of_tolerance_samples": [],
+  "uncertainty_overlap_samples": [],
+  "columns": {
+    "clock": "Dev5_BCLS_ai_time",
+    "sensor": "BENCH-TEMP",
+    "reference": "REF-TEMP"
+  },
+  "timestamp_unit": "ns"
 }
