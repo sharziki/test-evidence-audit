@@ -1,8 +1,10 @@
 # Test Evidence Audit
 
-Check a sensor against a reference after a bench run. The CLI gives you a verdict, shows where the log is missing evidence, and saves a JSON report you can attach to your test notes. Set up a calibration profile once and reuse it on every run with the same CSV layout and test protocol.
+**Check sensor agreement from a bench-test CSV.** Get a verdict in the terminal, see where the evidence is missing, and attach a JSON report to your test notes.
 
-Runs offline with Python 3.10 or newer. No packages to install.
+[Run the demo](#try-it-in-30-seconds) · [Use your own CSV](#use-your-own-csv) · [Read the verdict](#read-the-verdict)
+
+**Python 3.10+** · **Offline** · **No dependencies**
 
 ## Try it in 30 seconds
 
@@ -21,15 +23,21 @@ Largest measured difference: 0.1 (tolerance 0.5)
 
 The synthetic demo drops the seven readings that showed a 2.6 °C disagreement. The remaining readings agree within tolerance. The audit flags the missing interval so the run doesn’t get signed off as a pass.
 
+![Synthetic calibration showing a disagreement above tolerance only in the interval hidden by dropout](docs/dropout-demo.png)
+
 ## Use your own CSV
 
-**First run.** The CLI lists your headers and lets you select columns by number. Choose two channels in the same units and on the same clock, then enter your calibration window and acceptance limits.
+### 1. Save a profile
+
+The CLI lists your headers and lets you select columns by number. Choose two channels in the same units and on the same clock, then enter your calibration window and acceptance limits.
 
 ```sh
 python3 audit.py "run-01.csv" --setup calibration.json --report run-01-audit.json
 ```
 
-**Every run after that.** Reuse the profile and give each report its own filename. Omit `--report` for a terminal summary only.
+### 2. Check the next run
+
+Reuse the profile and give each report its own filename. Omit `--report` for a terminal summary only.
 
 ```sh
 python3 audit.py "run-02.csv" --profile calibration.json --report run-02-audit.json
@@ -57,6 +65,15 @@ Profiles save settings only. Review them before sharing or reusing them on a dif
 An invalid input exits with code 2. Confirmed failure takes precedence, and the report still lists coverage and uncertainty issues. The audit counts gaps between paired observations and at both window edges. Blank or NaN readings contribute no pair. It assumes a common clock and can only assess the samples and calibration limits you give it.
 
 Use `--json` to print the detailed report to stdout with a profile, `--list-columns` to print headers only, and `--help` for all options. The report includes paired-sample count, exact gap intervals, largest measured difference, and signed mean difference.
+
+## Common setup fixes
+
+| If you see… | Check… |
+| --- | --- |
+| Missing or unknown column | Run `python3 audit.py "my run.csv" --list-columns` and use the exact headers. |
+| Too few pairs or an oversized gap | Verify the timestamp unit, calibration window, and whether both channels have readings in that interval. |
+| Shared clock must be strictly increasing | Check for duplicate timestamps, clock resets, or rows out of order. |
+| Output already exists | Give the new report its own filename so you keep the previous result. |
 
 ## Development
 
